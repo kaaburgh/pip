@@ -627,3 +627,23 @@ class TestPackageFinderUploadedPriorTo:
 
         link_evaluator = finder.make_link_evaluator("test-package")
         assert link_evaluator._uploaded_prior_to is None
+
+
+
+def test_format_control_recheck_keeps_other_candidate_filters(data: TestData) -> None:
+    finder = make_test_finder(index_urls=[data.index_url("datarequire")])
+    finder.format_control.only_binary.add(":all:")
+
+    assert finder.find_all_candidates("fakepackage") == []
+
+    incompatible = finder.find_candidates_ignored_by_format_control(
+        "fakepackage",
+        specifier=SpecifierSet("==2.6.0"),
+    )
+    assert incompatible == []
+
+    compatible = finder.find_candidates_ignored_by_format_control(
+        "fakepackage",
+        specifier=SpecifierSet("==3.3.0"),
+    )
+    assert [str(candidate.version) for candidate in compatible] == ["3.3.0"]
