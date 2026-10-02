@@ -196,7 +196,6 @@ def test_new_resolver_no_versions_available_hint(script: PipTestEnvironment) -> 
     ), str(result)
 
 
-
 def test_new_resolver_reports_only_binary_source_exclusion(
     script: PipTestEnvironment,
 ) -> None:
@@ -347,7 +346,6 @@ def test_new_resolver_only_binary_hint_is_deduplicated_after_backtracking(
 
     message = "No matching binary distribution was found for sdist-dep"
     assert (result.stderr + result.stdout).count(message) == 1, str(result)
-
 
 
 def test_new_resolver_reports_package_specific_only_binary_exclusion(
