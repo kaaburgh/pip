@@ -1,3 +1,4 @@
+import hashlib
 import pathlib
 import sys
 
@@ -483,6 +484,36 @@ def test_new_resolver_only_binary_hint_not_shown_for_version_conflict(
     )
 
     assert "No matching binary distribution was found" not in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
+def test_new_resolver_only_binary_hint_not_shown_for_hashed_requirement(
+    tmpdir: pathlib.Path,
+    script: PipTestEnvironment,
+) -> None:
+    sdist = create_basic_sdist_for_package(script, "sdist-dep", "1.0.0")
+    digest = hashlib.sha256(sdist.read_bytes()).hexdigest()
+
+    requirements_file = tmpdir.joinpath("requirements.txt")
+    requirements_file.write_text(
+        f"sdist-dep==1.0.0 --hash=sha256:{digest}\n"
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "-r",
+        requirements_file,
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found for sdist-dep" not in (
         result.stderr + result.stdout
     ), str(result)
 
