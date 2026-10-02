@@ -684,6 +684,80 @@ class Factory:
             message += f"\n{specifier!r} (required by {package})"
         return UnsupportedPythonVersion(message)
 
+    @staticmethod
+    def _specifier_is_pinned(specifier: SpecifierSet) -> bool:
+        for part in specifier:
+            if part.operator == "===":
+                return True
+            if part.operator == "==" and not part.version.endswith(".*"):
+                return True
+        return False
+
+    def _format_control_exclusion_reason(
+        self,
+        req: Requirement,
+        constraint: Constraint | None = None,
+    ) -> str | None:
+        """Explain an --only-binary exclusion when the local fact is provable."""
+        candidate, ireq = req.get_candidate_lookup()
+        if candidate is not None or ireq is None or ireq.req is None:
+            return None
+
+        allowed_formats = self._finder.format_control.get_allowed_formats(
+            req.project_name
+        )
+        if "source" in allowed_formats:
+            return None
+
+        # Link constraints and explicit candidates use a different candidate
+        # path, so index/finder availability is not authoritative for them.
+        if constraint is not None and constraint.links:
+            return None
+
+        hashes = ireq.hashes(trust_internet=False)
+        if constraint is not None:
+            hashes &= constraint.hashes
+
+        # CandidateEvaluator deliberately keeps candidates when no advertised
+        # hash matches so pip can produce its normal hash error later. That is
+        # not strong enough evidence for this diagnostic, so stay silent.
+        if hashes:
+            return None
+
+        specifier = ireq.req.specifier
+        if constraint is not None:
+            specifier &= constraint.specifier
+
+        restricted = self._finder.find_best_candidate(
+            project_name=req.project_name,
+            specifier=specifier,
+            hashes=hashes,
+        ).applicable_candidates
+        if restricted:
+            return None
+
+        hidden = self._finder.find_candidates_ignored_by_format_control(
+            project_name=req.project_name,
+            specifier=specifier,
+            hashes=hashes,
+        )
+        hidden_sources = [candidate for candidate in hidden if not candidate.link.is_wheel]
+        if not hidden_sources:
+            return None
+
+        # Resolvelib normally ignores yanked candidates unless the requirement
+        # is pinned. Do not turn a yanked-only source release into a format hint
+        # for an unpinned requirement.
+        if all(candidate.link.is_yanked for candidate in hidden_sources):
+            if not self._specifier_is_pinned(specifier):
+                return None
+
+        return (
+            f"No matching binary distribution was found for {req.project_name}; "
+            "a matching source distribution is available, but source distributions "
+            "are excluded by the current --only-binary setting."
+        )
+
     def _report_single_requirement_conflict(
         self, req: Requirement, parent: Candidate | None
     ) -> DistributionNotFound:
@@ -757,6 +831,10 @@ class Factory:
                 req_disp,
                 ", ".join(versions) or "none",
             )
+        format_reason = self._format_control_exclusion_reason(req)
+        if format_reason:
+            logger.critical(format_reason)
+
         if str(req) == "requirements.txt":
             logger.info(
                 "HINT: You are attempting to install a package literally "
@@ -866,6 +944,18 @@ class Factory:
         for key in relevant_constraints:
             constraint_text = f"{key}{constraints[key].format_for_error()}"
             msg += f"\n    The user requested (constraint) {constraint_text}"
+
+        format_reasons: set[str] = set()
+        for req, _ in e.causes:
+            constraint = constraints.get(req.name)
+            if constraint is None:
+                constraint = constraints.get(req.project_name)
+            reason = self._format_control_exclusion_reason(req, constraint)
+            if reason:
+                format_reasons.add(reason)
+
+        if format_reasons:
+            msg += "\n\n" + "\n".join(sorted(format_reasons))
 
         # Check for causes that had no candidates
         causes = set()
