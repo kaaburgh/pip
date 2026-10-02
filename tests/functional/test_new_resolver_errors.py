@@ -9,6 +9,7 @@ from tests.lib import (
 )
 from tests.lib.wheel import make_wheel
 
+
 def test_new_resolver_conflict_requirements_file(
     tmpdir: pathlib.Path, script: PipTestEnvironment
 ) -> None:
@@ -44,6 +45,7 @@ def test_new_resolver_conflict_requirements_file(
     message = "package versions have conflicting dependencies"
     assert message in result.stderr, str(result)
 
+
 def test_new_resolver_conflict_constraints_file(
     tmpdir: pathlib.Path, script: PipTestEnvironment
 ) -> None:
@@ -68,6 +70,7 @@ def test_new_resolver_conflict_constraints_file(
 
     message = "The user requested (constraint) pkg!=1.0"
     assert message in result.stdout, str(result)
+
 
 def test_new_resolver_requires_python_error(script: PipTestEnvironment) -> None:
     compatible_python = f">={sys.version_info.major}.{sys.version_info.minor}"
@@ -95,6 +98,7 @@ def test_new_resolver_requires_python_error(script: PipTestEnvironment) -> None:
     # conflict, not the compatible one.
     assert incompatible_python in result.stderr, str(result)
     assert compatible_python not in result.stderr, str(result)
+
 
 def test_new_resolver_checks_requires_python_before_dependencies(
     script: PipTestEnvironment,
@@ -132,6 +136,7 @@ def test_new_resolver_checks_requires_python_before_dependencies(
     # Setuptools produces wheels with normalized names.
     assert "pkg_dep" not in result.stderr, str(result)
     assert "pkg_dep" not in result.stdout, str(result)
+
 
 def test_new_resolver_no_versions_available_hint(script: PipTestEnvironment) -> None:
     """
@@ -190,6 +195,7 @@ def test_new_resolver_no_versions_available_hint(script: PipTestEnvironment) -> 
         "    incompatible-dep\n" in result.stdout
     ), str(result)
 
+
 def test_new_resolver_reports_only_binary_source_exclusion(
     script: PipTestEnvironment,
 ) -> None:
@@ -220,6 +226,7 @@ def test_new_resolver_reports_only_binary_source_exclusion(
         in result.stderr + result.stdout
     ), str(result)
 
+
 def test_new_resolver_only_binary_hint_respects_requirement_version(
     script: PipTestEnvironment,
 ) -> None:
@@ -246,6 +253,7 @@ def test_new_resolver_only_binary_hint_respects_requirement_version(
     assert "No matching binary distribution was found for sdist-dep" not in (
         result.stderr + result.stdout
     ), str(result)
+
 
 def test_new_resolver_only_binary_hint_ignores_unrelated_wheel(
     script: PipTestEnvironment,
@@ -274,6 +282,7 @@ def test_new_resolver_only_binary_hint_ignores_unrelated_wheel(
     assert "No matching binary distribution was found for mixed-dep" in (
         result.stderr + result.stdout
     ), str(result)
+
 
 def test_new_resolver_only_binary_hint_with_incompatible_wheel(
     script: PipTestEnvironment,
@@ -310,6 +319,7 @@ def test_new_resolver_only_binary_hint_with_incompatible_wheel(
         result.stderr + result.stdout
     ), str(result)
 
+
 def test_new_resolver_only_binary_hint_is_deduplicated_after_backtracking(
     script: PipTestEnvironment,
 ) -> None:
@@ -340,6 +350,7 @@ def test_new_resolver_only_binary_hint_is_deduplicated_after_backtracking(
     assert (
         "matching distributions available for your environment" not in output
     ), str(result)
+
 
 def test_new_resolver_reports_package_specific_only_binary_exclusion(
     script: PipTestEnvironment,
@@ -403,6 +414,7 @@ def test_new_resolver_only_binary_hint_qualifies_conflicting_requirement(
     output = result.stderr + result.stdout
     assert "No matching binary distribution was found for mixed-dep>=2" in output
     assert "No matching binary distribution was found for mixed-dep;" not in output
+
 
 def test_new_resolver_only_binary_hint_not_shown_for_version_conflict(
     script: PipTestEnvironment,
