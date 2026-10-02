@@ -321,18 +321,7 @@ class Factory:
             # solely satisfied by a yanked release.
             all_yanked = all(ican.link.is_yanked for ican in icans)
 
-            def is_pinned(specifier: SpecifierSet) -> bool:
-                for sp in specifier:
-                    if sp.operator == "===":
-                        return True
-                    if sp.operator != "==":
-                        continue
-                    if sp.version.endswith(".*"):
-                        continue
-                    return True
-                return False
-
-            pinned = is_pinned(specifier)
+            pinned = self._specifier_is_pinned(specifier)
 
             # PackageFinder returns earlier versions first, so we reverse.
             for ican in reversed(icans):
