@@ -347,3 +347,32 @@ def test_new_resolver_only_binary_hint_is_deduplicated_after_backtracking(
 
     message = "No matching binary distribution was found for sdist-dep"
     assert (result.stderr + result.stdout).count(message) == 1, str(result)
+
+
+
+def test_new_resolver_reports_package_specific_only_binary_exclusion(
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_sdist_for_package(script, "sdist-dep", "1.0.0")
+    create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["sdist-dep==1.0.0"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        "sdist-dep",
+        "requesting-pkg",
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found for sdist-dep" in (
+        result.stderr + result.stdout
+    ), str(result)
