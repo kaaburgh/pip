@@ -285,6 +285,88 @@ def test_new_resolver_only_binary_hint_ignores_unrelated_wheel(
     ), str(result)
 
 
+def _create_yanked_wheel_and_sdist_page(
+    script: PipTestEnvironment,
+    *,
+    name: str,
+    version: str,
+) -> pathlib.Path:
+    wheel = create_basic_wheel_for_package(script, name, version)
+    sdist = create_basic_sdist_for_package(script, name, version)
+    page = script.scratch_path.joinpath(f"{name}-links.html")
+    page.write_text(
+        "<html><body>\n"
+        f'<a data-yanked="test" href="{wheel.name}">{wheel.name}</a>\n'
+        f'<a href="{sdist.name}">{sdist.name}</a>\n'
+        "</body></html>\n"
+    )
+    return page
+
+
+def test_new_resolver_only_binary_hint_with_yanked_wheel(
+    script: PipTestEnvironment,
+) -> None:
+    page = _create_yanked_wheel_and_sdist_page(
+        script,
+        name="yanked-dep",
+        version="1.0.0",
+    )
+    parent = create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["yanked-dep"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        page,
+        "--only-binary",
+        ":all:",
+        parent,
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found for yanked-dep" in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
+def test_new_resolver_only_binary_pinned_yanked_wheel_still_resolves(
+    script: PipTestEnvironment,
+) -> None:
+    page = _create_yanked_wheel_and_sdist_page(
+        script,
+        name="yanked-dep",
+        version="1.0.0",
+    )
+    parent = create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["yanked-dep==1.0.0"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        page,
+        "--only-binary",
+        ":all:",
+        parent,
+        allow_stderr_warning=True,
+    )
+
+    assert "No matching binary distribution was found for yanked-dep" not in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
 def test_new_resolver_only_binary_hint_with_incompatible_wheel(
     script: PipTestEnvironment,
 ) -> None:
@@ -348,9 +430,9 @@ def test_new_resolver_only_binary_hint_is_deduplicated_after_backtracking(
     message = "No matching binary distribution was found for sdist-dep"
     output = result.stderr + result.stdout
     assert output.count(message) == 1, str(result)
-    assert (
-        "matching distributions available for your environment" not in output
-    ), str(result)
+    assert "matching distributions available for your environment" not in output, str(
+        result
+    )
 
 
 def test_new_resolver_reports_package_specific_only_binary_exclusion(
@@ -524,9 +606,7 @@ def test_new_resolver_only_binary_hint_not_shown_for_hashed_requirement(
     digest = hashlib.sha256(sdist.read_bytes()).hexdigest()
 
     requirements_file = tmpdir.joinpath("requirements.txt")
-    requirements_file.write_text(
-        f"sdist-dep==1.0.0 --hash=sha256:{digest}\n"
-    )
+    requirements_file.write_text(f"sdist-dep==1.0.0 --hash=sha256:{digest}\n")
 
     result = script.pip(
         "install",
