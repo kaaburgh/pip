@@ -518,6 +518,31 @@ class TestLinkEvaluator:
         assert actual == (LinkType.candidate, expected_version)
 
     @pytest.mark.parametrize(
+        "formats, url, fail_reason",
+        [
+            (
+                ["binary"],
+                "http:/yo/pytest-1.0.tar.gz",
+                "No sources permitted for pytest",
+            ),
+            (
+                ["source"],
+                "http:/yo/pytest-1.0-py2.py3-none-any.whl",
+                "No binaries permitted for pytest",
+            ),
+        ],
+    )
+    def test_evaluate_link__format_control(
+        self,
+        formats: list[str],
+        url: str,
+        fail_reason: str,
+    ) -> None:
+        link = Link(url)
+        evaluator = self.make_test_link_evaluator(formats=formats)
+        assert evaluator.evaluate_link(link) == (LinkType.format_control, fail_reason)
+
+    @pytest.mark.parametrize(
         "url, link_type, fail_reason",
         [
             # TODO: Uncomment this test case when #1217 is fixed.
