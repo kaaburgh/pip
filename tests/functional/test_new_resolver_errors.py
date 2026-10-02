@@ -374,3 +374,40 @@ def test_new_resolver_reports_package_specific_only_binary_exclusion(
     assert "No matching binary distribution was found for sdist-dep" in (
         result.stderr + result.stdout
     ), str(result)
+
+
+
+def test_new_resolver_only_binary_hint_not_shown_for_version_conflict(
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_wheel_for_package(script, "base", "1.0")
+    create_basic_wheel_for_package(script, "base", "2.0")
+    create_basic_wheel_for_package(
+        script,
+        "pkga",
+        "1.0",
+        depends=["base==1.0"],
+    )
+    create_basic_wheel_for_package(
+        script,
+        "pkgb",
+        "1.0",
+        depends=["base==2.0"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "pkga",
+        "pkgb",
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found" not in (
+        result.stderr + result.stdout
+    ), str(result)
