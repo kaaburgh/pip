@@ -32,6 +32,7 @@ from pip._internal.exceptions import (
 )
 from pip._internal.index.package_finder import PackageFinder
 from pip._internal.metadata import BaseDistribution, get_default_environment
+from pip._internal.models.candidate import InstallationCandidate
 from pip._internal.models.link import Link
 from pip._internal.models.wheel import Wheel
 from pip._internal.operations.prepare import RequirementPreparer
@@ -314,19 +315,13 @@ class Factory:
                 specifier=specifier,
                 hashes=hashes,
             )
-            icans = result.applicable_candidates
-
-            # PEP 592: Yanked releases are ignored unless the specifier
-            # explicitly pins a version (via '==' or '===') that can be
-            # solely satisfied by a yanked release.
-            all_yanked = all(ican.link.is_yanked for ican in icans)
-
-            pinned = self._specifier_is_pinned(specifier)
+            icans = self._filter_yanked_candidates(
+                result.applicable_candidates,
+                specifier,
+            )
 
             # PackageFinder returns earlier versions first, so we reverse.
             for ican in reversed(icans):
-                if not (all_yanked and pinned) and ican.link.is_yanked:
-                    continue
                 func = functools.partial(
                     self._make_candidate_from_link,
                     link=ican.link,
@@ -682,6 +677,18 @@ class Factory:
                 return True
         return False
 
+    @classmethod
+    def _filter_yanked_candidates(
+        cls,
+        candidates: Sequence[InstallationCandidate],
+        specifier: SpecifierSet,
+    ) -> list[InstallationCandidate]:
+        """Apply the PEP 592 yanked policy used by resolvelib candidate iteration."""
+        if candidates and all(candidate.link.is_yanked for candidate in candidates):
+            if cls._specifier_is_pinned(specifier):
+                return list(candidates)
+        return [candidate for candidate in candidates if not candidate.link.is_yanked]
+
     def _format_control_exclusion_reason(
         self,
         req: Requirement,
@@ -722,7 +729,7 @@ class Factory:
             specifier=specifier,
             hashes=hashes,
         ).applicable_candidates
-        if restricted:
+        if self._filter_yanked_candidates(restricted, specifier):
             return None
 
         hidden = self._finder.find_candidates_ignored_by_format_control(
@@ -730,18 +737,15 @@ class Factory:
             specifier=specifier,
             hashes=hashes,
         )
+        permissive = self._filter_yanked_candidates(
+            [*restricted, *hidden],
+            specifier,
+        )
         hidden_sources = [
-            candidate for candidate in hidden if not candidate.link.is_wheel
+            candidate for candidate in permissive if not candidate.link.is_wheel
         ]
         if not hidden_sources:
             return None
-
-        # Resolvelib normally ignores yanked candidates unless the requirement
-        # is pinned. Do not turn a yanked-only source release into a format hint
-        # for an unpinned requirement.
-        if all(candidate.link.is_yanked for candidate in hidden_sources):
-            if not self._specifier_is_pinned(specifier):
-                return None
 
         requirement = f"{req.project_name}{specifier}"
         return (
