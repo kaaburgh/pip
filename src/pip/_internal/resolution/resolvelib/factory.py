@@ -741,7 +741,9 @@ class Factory:
             specifier=specifier,
             hashes=hashes,
         )
-        hidden_sources = [candidate for candidate in hidden if not candidate.link.is_wheel]
+        hidden_sources = [
+            candidate for candidate in hidden if not candidate.link.is_wheel
+        ]
         if not hidden_sources:
             return None
 
