@@ -743,10 +743,11 @@ class Factory:
             if not self._specifier_is_pinned(specifier):
                 return None
 
+        requirement = f"{req.project_name}{specifier}"
         return (
-            f"No matching binary distribution was found for {req.project_name}; "
-            "a matching source distribution is available, but source distributions "
-            "are excluded by the current --only-binary setting."
+            f"No matching binary distribution was found for {requirement}; "
+            "a source distribution matching this requirement was found, but source "
+            "distributions are excluded by the current --only-binary setting."
         )
 
     def _report_single_requirement_conflict(
@@ -880,10 +881,7 @@ class Factory:
         # satisfied. We just report that case.
         if len(e.causes) == 1:
             req, parent = next(iter(e.causes))
-            constraint = constraints.get(req.name)
-            if constraint is None:
-                constraint = constraints.get(req.project_name)
-            if constraint is None:
+            if req.name not in constraints:
                 return self._report_single_requirement_conflict(req, parent)
 
         # OK, we now have a list of requirements that can't all be
@@ -940,6 +938,7 @@ class Factory:
             msg += f"\n    The user requested (constraint) {constraint_text}"
 
         format_reasons: set[str] = set()
+        format_excluded_names: set[str] = set()
         for req, _ in e.causes:
             constraint = constraints.get(req.name)
             if constraint is None:
@@ -947,16 +946,23 @@ class Factory:
             reason = self._format_control_exclusion_reason(req, constraint)
             if reason:
                 format_reasons.add(reason)
+                format_excluded_names.add(req.name)
 
         if format_reasons:
             msg += "\n\n" + "\n".join(sorted(format_reasons))
 
-        # Check for causes that had no candidates
+        # Check for causes that had no candidates. A requirement for which we
+        # just proved a source distribution was excluded by FormatControl should
+        # not also be described as having no matching distribution.
         causes = set()
         for req, _ in e.causes:
             causes.add(req.name)
 
-        no_candidates = {c for c in causes if not self._has_any_candidates(c)}
+        no_candidates = {
+            c
+            for c in causes
+            if c not in format_excluded_names and not self._has_any_candidates(c)
+        }
         if no_candidates:
             msg = (
                 msg
