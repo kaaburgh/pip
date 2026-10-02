@@ -629,7 +629,6 @@ class TestPackageFinderUploadedPriorTo:
         assert link_evaluator._uploaded_prior_to is None
 
 
-
 def test_format_control_recheck_keeps_other_candidate_filters(data: TestData) -> None:
     finder = make_test_finder(index_urls=[data.index_url("datarequire")])
     finder.format_control.only_binary.add(":all:")
