@@ -380,6 +380,41 @@ def test_new_resolver_reports_package_specific_only_binary_exclusion(
     ), str(result)
 
 
+def test_new_resolver_only_binary_hint_respects_version_constraint(
+    tmpdir: pathlib.Path,
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_wheel_for_package(script, "mixed-dep", "1.0.0")
+    create_basic_sdist_for_package(script, "mixed-dep", "2.0.0")
+    create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["mixed-dep"],
+    )
+
+    constraints_file = tmpdir.joinpath("constraints.txt")
+    constraints_file.write_text("mixed-dep==2.0.0\n")
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "-c",
+        constraints_file,
+        "requesting-pkg",
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found for mixed-dep==2.0.0" in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
 def test_new_resolver_only_binary_hint_qualifies_conflicting_requirement(
     script: PipTestEnvironment,
 ) -> None:
