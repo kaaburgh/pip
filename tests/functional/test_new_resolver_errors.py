@@ -411,3 +411,43 @@ def test_new_resolver_only_binary_hint_not_shown_for_version_conflict(
     assert "No matching binary distribution was found" not in (
         result.stderr + result.stdout
     ), str(result)
+
+
+
+def test_new_resolver_only_binary_hint_not_shown_for_link_constraint(
+    tmpdir: pathlib.Path,
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_sdist_for_package(script, "mixed-dep", "2.0.0")
+    constrained_wheel = create_basic_wheel_for_package(
+        script,
+        "mixed-dep",
+        "1.0.0",
+    )
+    create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["mixed-dep==2.0.0"],
+    )
+
+    constraints_file = tmpdir.joinpath("constraints.txt")
+    constraints_file.write_text(f"mixed-dep @ {constrained_wheel.as_uri()}\n")
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "-c",
+        constraints_file,
+        "requesting-pkg",
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found for mixed-dep" not in (
+        result.stderr + result.stdout
+    ), str(result)
