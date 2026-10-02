@@ -825,7 +825,7 @@ class Factory:
             )
         format_reason = self._format_control_exclusion_reason(req)
         if format_reason:
-            logger.critical(format_reason)
+            logger.critical("%s", format_reason)
 
         if str(req) == "requirements.txt":
             logger.info(
@@ -937,9 +937,17 @@ class Factory:
             constraint_text = f"{key}{constraints[key].format_for_error()}"
             msg += f"\n    The user requested (constraint) {constraint_text}"
 
+        explicit_projects = {
+            req.project_name
+            for req, _ in e.causes
+            if isinstance(req, ExplicitRequirement)
+        }
+
         format_reasons: set[str] = set()
         format_excluded_names: set[str] = set()
         for req, _ in e.causes:
+            if req.project_name in explicit_projects:
+                continue
             constraint = constraints.get(req.name)
             if constraint is None:
                 constraint = constraints.get(req.project_name)
