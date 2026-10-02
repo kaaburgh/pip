@@ -452,6 +452,34 @@ def test_new_resolver_only_binary_hint_qualifies_conflicting_requirement(
     assert "No matching binary distribution was found for mixed-dep;" not in output
 
 
+def test_new_resolver_only_binary_hint_not_shown_for_no_binary(
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_wheel_for_package(script, "wheel-only-dep", "1.0.0")
+    create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["wheel-only-dep==1.0.0"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--no-binary",
+        "wheel-only-dep",
+        "requesting-pkg",
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found" not in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
 def test_new_resolver_only_binary_hint_not_shown_for_version_conflict(
     script: PipTestEnvironment,
 ) -> None:
