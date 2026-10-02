@@ -635,14 +635,19 @@ def test_format_control_recheck_keeps_other_candidate_filters(data: TestData) ->
 
     assert finder.find_all_candidates("fakepackage") == []
 
-    incompatible = finder.find_candidates_ignored_by_format_control(
-        "fakepackage",
-        specifier=SpecifierSet("==2.6.0"),
-    )
-    assert incompatible == []
+    with patch.object(
+        finder._link_collector,
+        "collect_sources",
+        side_effect=AssertionError("format-control recheck must not collect sources"),
+    ):
+        incompatible = finder.find_candidates_ignored_by_format_control(
+            "fakepackage",
+            specifier=SpecifierSet("==2.6.0"),
+        )
+        assert incompatible == []
 
-    compatible = finder.find_candidates_ignored_by_format_control(
-        "fakepackage",
-        specifier=SpecifierSet("==3.3.0"),
-    )
-    assert [str(candidate.version) for candidate in compatible] == ["3.3.0"]
+        compatible = finder.find_candidates_ignored_by_format_control(
+            "fakepackage",
+            specifier=SpecifierSet("==3.3.0"),
+        )
+        assert [str(candidate.version) for candidate in compatible] == ["3.3.0"]
