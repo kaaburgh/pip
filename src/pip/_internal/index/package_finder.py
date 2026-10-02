@@ -109,6 +109,7 @@ class LinkType(enum.Enum):
     candidate = enum.auto()
     different_project = enum.auto()
     yanked = enum.auto()
+    format_control = enum.auto()
     format_unsupported = enum.auto()
     format_invalid = enum.auto()
     platform_mismatch = enum.auto()
@@ -196,7 +197,7 @@ class LinkEvaluator:
                 )
             if "binary" not in self._formats and ext == WHEEL_EXTENSION:
                 reason = f"No binaries permitted for {self.project_name}"
-                return (LinkType.format_unsupported, reason)
+                return (LinkType.format_control, reason)
             if "macosx10" in link.path and ext == ".zip":
                 return (LinkType.format_unsupported, "macosx10 one")
             if ext == WHEEL_EXTENSION:
@@ -248,7 +249,7 @@ class LinkEvaluator:
         # This should be up by the self.ok_binary check, but see issue 2700.
         if "source" not in self._formats and ext != WHEEL_EXTENSION:
             reason = f"No sources permitted for {self.project_name}"
-            return (LinkType.format_unsupported, reason)
+            return (LinkType.format_control, reason)
 
         if not version:
             version = _extract_version_from_fragment(
@@ -655,6 +656,11 @@ class PackageFinder:
         # the error message when resolution fails.
         self._requires_python_skipped: set[str] = set()
 
+        # Keep the exact links rejected by binary/source policy so error
+        # reporting can re-evaluate those links without collecting the project
+        # from indexes a second time.
+        self._format_control_skipped: dict[NormalizedName, set[Link]] = {}
+
         # Cache of the result of finding candidates
         self._all_candidates: dict[str, list[InstallationCandidate]] = {}
         self._best_candidates: dict[
@@ -777,9 +783,12 @@ class PackageFinder:
     def requires_python_skipped_reasons(self) -> list[str]:
         return sorted(self._requires_python_skipped)
 
-    def make_link_evaluator(self, project_name: str) -> LinkEvaluator:
+    def make_link_evaluator(
+        self, project_name: str, *, formats: frozenset[str] | None = None
+    ) -> LinkEvaluator:
         canonical_name = canonicalize_name(project_name)
-        formats = self.format_control.get_allowed_formats(canonical_name)
+        if formats is None:
+            formats = self.format_control.get_allowed_formats(canonical_name)
 
         return LinkEvaluator(
             project_name=project_name,
@@ -827,6 +836,9 @@ class PackageFinder:
             # when --uploaded-prior-to is specified
             raise InstallationError(detail)
         if result != LinkType.candidate:
+            if result == LinkType.format_control:
+                canonical_name = canonicalize_name(link_evaluator.project_name)
+                self._format_control_skipped.setdefault(canonical_name, set()).add(link)
             self._log_skipped_link(link, result, detail)
             return None
 
@@ -950,6 +962,50 @@ class PackageFinder:
         self._all_candidates[project_name] = file_candidates + page_candidates
 
         return self._all_candidates[project_name]
+
+    def find_candidates_ignored_by_format_control(
+        self,
+        project_name: str,
+        specifier: specifiers.BaseSpecifier | None = None,
+        hashes: Hashes | None = None,
+    ) -> list[InstallationCandidate]:
+        """Return matching candidates from links rejected only by format policy.
+
+        This performs no index or find-links collection. It re-evaluates only
+        links observed by the normal finder pass and rejected specifically by
+        FormatControl, with binary and source formats both enabled. All other
+        LinkEvaluator checks remain active.
+        """
+        canonical_name = canonicalize_name(project_name)
+        links = self._format_control_skipped.get(canonical_name)
+        if not links:
+            return []
+
+        link_evaluator = self.make_link_evaluator(
+            project_name, formats=frozenset({"binary", "source"})
+        )
+        candidates: list[InstallationCandidate] = []
+        for link in self._sort_links(links):
+            result, detail = link_evaluator.evaluate_link(link)
+            if result != LinkType.candidate:
+                continue
+            try:
+                candidates.append(
+                    InstallationCandidate(
+                        name=project_name,
+                        link=link,
+                        version=detail,
+                    )
+                )
+            except InvalidVersion:
+                continue
+
+        candidate_evaluator = self.make_candidate_evaluator(
+            project_name=project_name,
+            specifier=specifier,
+            hashes=hashes,
+        )
+        return candidate_evaluator.get_applicable_candidates(candidates)
 
     def make_candidate_evaluator(
         self,

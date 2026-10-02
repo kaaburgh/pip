@@ -32,6 +32,7 @@ from pip._internal.exceptions import (
 )
 from pip._internal.index.package_finder import PackageFinder
 from pip._internal.metadata import BaseDistribution, get_default_environment
+from pip._internal.models.candidate import InstallationCandidate
 from pip._internal.models.link import Link
 from pip._internal.models.wheel import Wheel
 from pip._internal.operations.prepare import RequirementPreparer
@@ -314,30 +315,13 @@ class Factory:
                 specifier=specifier,
                 hashes=hashes,
             )
-            icans = result.applicable_candidates
-
-            # PEP 592: Yanked releases are ignored unless the specifier
-            # explicitly pins a version (via '==' or '===') that can be
-            # solely satisfied by a yanked release.
-            all_yanked = all(ican.link.is_yanked for ican in icans)
-
-            def is_pinned(specifier: SpecifierSet) -> bool:
-                for sp in specifier:
-                    if sp.operator == "===":
-                        return True
-                    if sp.operator != "==":
-                        continue
-                    if sp.version.endswith(".*"):
-                        continue
-                    return True
-                return False
-
-            pinned = is_pinned(specifier)
+            icans = self._filter_yanked_candidates(
+                result.applicable_candidates,
+                specifier,
+            )
 
             # PackageFinder returns earlier versions first, so we reverse.
             for ican in reversed(icans):
-                if not (all_yanked and pinned) and ican.link.is_yanked:
-                    continue
                 func = functools.partial(
                     self._make_candidate_from_link,
                     link=ican.link,
@@ -684,6 +668,92 @@ class Factory:
             message += f"\n{specifier!r} (required by {package})"
         return UnsupportedPythonVersion(message)
 
+    @staticmethod
+    def _specifier_is_pinned(specifier: SpecifierSet) -> bool:
+        for part in specifier:
+            if part.operator == "===":
+                return True
+            if part.operator == "==" and not part.version.endswith(".*"):
+                return True
+        return False
+
+    @classmethod
+    def _filter_yanked_candidates(
+        cls,
+        candidates: Sequence[InstallationCandidate],
+        specifier: SpecifierSet,
+    ) -> list[InstallationCandidate]:
+        """Apply the PEP 592 yanked policy used by resolvelib candidate iteration."""
+        if candidates and all(candidate.link.is_yanked for candidate in candidates):
+            if cls._specifier_is_pinned(specifier):
+                return list(candidates)
+        return [candidate for candidate in candidates if not candidate.link.is_yanked]
+
+    def _format_control_exclusion_reason(
+        self,
+        req: Requirement,
+        constraint: Constraint | None = None,
+    ) -> str | None:
+        """Explain an --only-binary exclusion when the local fact is provable."""
+        candidate, ireq = req.get_candidate_lookup()
+        if candidate is not None or ireq is None or ireq.req is None:
+            return None
+
+        allowed_formats = self._finder.format_control.get_allowed_formats(
+            req.project_name
+        )
+        if "source" in allowed_formats:
+            return None
+
+        # Link constraints and explicit candidates use a different candidate
+        # path, so index/finder availability is not authoritative for them.
+        if constraint is not None and constraint.links:
+            return None
+
+        hashes = ireq.hashes(trust_internet=False)
+        if constraint is not None:
+            hashes &= constraint.hashes
+
+        # CandidateEvaluator deliberately keeps candidates when no advertised
+        # hash matches so pip can produce its normal hash error later. That is
+        # not strong enough evidence for this diagnostic, so stay silent.
+        if hashes:
+            return None
+
+        specifier = ireq.req.specifier
+        if constraint is not None:
+            specifier &= constraint.specifier
+
+        restricted = self._finder.find_best_candidate(
+            project_name=req.project_name,
+            specifier=specifier,
+            hashes=hashes,
+        ).applicable_candidates
+        if self._filter_yanked_candidates(restricted, specifier):
+            return None
+
+        hidden = self._finder.find_candidates_ignored_by_format_control(
+            project_name=req.project_name,
+            specifier=specifier,
+            hashes=hashes,
+        )
+        permissive = self._filter_yanked_candidates(
+            [*restricted, *hidden],
+            specifier,
+        )
+        hidden_sources = [
+            candidate for candidate in permissive if not candidate.link.is_wheel
+        ]
+        if not hidden_sources:
+            return None
+
+        requirement = f"{req.project_name}{specifier}"
+        return (
+            f"No matching binary distribution was found for {requirement}; "
+            "a source distribution matching this requirement was found, but source "
+            "distributions are excluded by the current --only-binary setting."
+        )
+
     def _report_single_requirement_conflict(
         self, req: Requirement, parent: Candidate | None
     ) -> DistributionNotFound:
@@ -757,6 +827,10 @@ class Factory:
                 req_disp,
                 ", ".join(versions) or "none",
             )
+        format_reason = self._format_control_exclusion_reason(req)
+        if format_reason:
+            logger.critical("%s", format_reason)
+
         if str(req) == "requirements.txt":
             logger.info(
                 "HINT: You are attempting to install a package literally "
@@ -867,12 +941,40 @@ class Factory:
             constraint_text = f"{key}{constraints[key].format_for_error()}"
             msg += f"\n    The user requested (constraint) {constraint_text}"
 
-        # Check for causes that had no candidates
+        explicit_projects = {
+            req.project_name
+            for req, _ in e.causes
+            if isinstance(req, ExplicitRequirement)
+        }
+
+        format_reasons: set[str] = set()
+        format_excluded_names: set[str] = set()
+        for req, _ in e.causes:
+            if req.project_name in explicit_projects:
+                continue
+            constraint = constraints.get(req.name)
+            if constraint is None:
+                constraint = constraints.get(req.project_name)
+            reason = self._format_control_exclusion_reason(req, constraint)
+            if reason:
+                format_reasons.add(reason)
+                format_excluded_names.add(req.name)
+
+        if format_reasons:
+            msg += "\n\n" + "\n".join(sorted(format_reasons))
+
+        # Check for causes that had no candidates. A requirement for which we
+        # just proved a source distribution was excluded by FormatControl should
+        # not also be described as having no matching distribution.
         causes = set()
         for req, _ in e.causes:
             causes.add(req.name)
 
-        no_candidates = {c for c in causes if not self._has_any_candidates(c)}
+        no_candidates = {
+            c
+            for c in causes
+            if c not in format_excluded_names and not self._has_any_candidates(c)
+        }
         if no_candidates:
             msg = (
                 msg

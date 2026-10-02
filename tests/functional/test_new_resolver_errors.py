@@ -1,8 +1,10 @@
+import hashlib
 import pathlib
 import sys
 
 from tests.lib import (
     PipTestEnvironment,
+    create_basic_sdist_for_package,
     create_basic_wheel_for_package,
     create_test_package_with_setup,
 )
@@ -192,4 +194,506 @@ def test_new_resolver_no_versions_available_hint(script: PipTestEnvironment) -> 
         "Additionally, some packages in these conflicts have no "
         "matching distributions available for your environment:\n"
         "    incompatible-dep\n" in result.stdout
+    ), str(result)
+
+
+def test_new_resolver_reports_only_binary_source_exclusion(
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_sdist_for_package(script, "sdist-dep", "1.0.0")
+    create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["sdist-dep==1.0.0"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "requesting-pkg",
+        expect_error=True,
+    )
+
+    assert (
+        "No matching binary distribution was found for sdist-dep==1.0.0; "
+        "a source distribution matching this requirement was found, but source "
+        "distributions are excluded by the current --only-binary setting."
+        in result.stderr + result.stdout
+    ), str(result)
+
+
+def test_new_resolver_only_binary_hint_respects_requirement_version(
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_sdist_for_package(script, "sdist-dep", "1.0.0")
+    create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["sdist-dep==2.0.0"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "requesting-pkg",
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found for sdist-dep" not in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
+def test_new_resolver_only_binary_hint_ignores_unrelated_wheel(
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_wheel_for_package(script, "mixed-dep", "1.0.0")
+    create_basic_sdist_for_package(script, "mixed-dep", "2.0.0")
+    create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["mixed-dep==2.0.0"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "requesting-pkg",
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found for mixed-dep" in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
+def _create_yanked_wheel_and_sdist_page(
+    script: PipTestEnvironment,
+    *,
+    name: str,
+    version: str,
+) -> pathlib.Path:
+    wheel = create_basic_wheel_for_package(script, name, version)
+    sdist = create_basic_sdist_for_package(script, name, version)
+    page = script.scratch_path.joinpath(f"{name}-links.html")
+    page.write_text(
+        "<html><body>\n"
+        f'<a data-yanked="test" href="{wheel.name}">{wheel.name}</a>\n'
+        f'<a href="{sdist.name}">{sdist.name}</a>\n'
+        "</body></html>\n"
+    )
+    return page
+
+
+def test_new_resolver_only_binary_hint_with_yanked_wheel(
+    script: PipTestEnvironment,
+) -> None:
+    page = _create_yanked_wheel_and_sdist_page(
+        script,
+        name="yanked-dep",
+        version="1.0.0",
+    )
+    parent = create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["yanked-dep"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        page,
+        "--only-binary",
+        ":all:",
+        parent,
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found for yanked-dep" in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
+def test_new_resolver_only_binary_pinned_yanked_wheel_still_resolves(
+    script: PipTestEnvironment,
+) -> None:
+    page = _create_yanked_wheel_and_sdist_page(
+        script,
+        name="yanked-dep",
+        version="1.0.0",
+    )
+    parent = create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["yanked-dep==1.0.0"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        page,
+        "--only-binary",
+        ":all:",
+        parent,
+        allow_stderr_warning=True,
+    )
+
+    assert "No matching binary distribution was found for yanked-dep" not in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
+def test_new_resolver_only_binary_hint_with_incompatible_wheel(
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_sdist_for_package(script, "mixed-dep", "1.0.0")
+    incompatible_wheel = make_wheel(
+        name="mixed-dep",
+        version="1.0.0",
+        wheel_metadata_updates={"Tag": ["py3-none-fakeplat"]},
+    )
+    incompatible_wheel.save_to(
+        script.scratch_path.joinpath("mixed_dep-1.0.0-py3-none-fakeplat.whl")
+    )
+    create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["mixed-dep==1.0.0"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "requesting-pkg",
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found for mixed-dep" in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
+def test_new_resolver_only_binary_hint_is_deduplicated_after_backtracking(
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_sdist_for_package(script, "sdist-dep", "1.0.0")
+    for version in ("1.0.0", "2.0.0"):
+        create_basic_wheel_for_package(
+            script,
+            "requesting-pkg",
+            version,
+            depends=["sdist-dep==1.0.0"],
+        )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "requesting-pkg",
+        expect_error=True,
+    )
+
+    message = "No matching binary distribution was found for sdist-dep"
+    output = result.stderr + result.stdout
+    assert output.count(message) == 1, str(result)
+    assert "matching distributions available for your environment" not in output, str(
+        result
+    )
+
+
+def test_new_resolver_reports_package_specific_only_binary_exclusion(
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_sdist_for_package(script, "sdist-dep", "1.0.0")
+    create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["sdist-dep==1.0.0"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        "sdist-dep",
+        "requesting-pkg",
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found for sdist-dep" in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
+def test_new_resolver_only_binary_hint_respects_version_constraint(
+    tmpdir: pathlib.Path,
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_wheel_for_package(script, "mixed-dep", "1.0.0")
+    create_basic_sdist_for_package(script, "mixed-dep", "2.0.0")
+    create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["mixed-dep"],
+    )
+
+    constraints_file = tmpdir.joinpath("constraints.txt")
+    constraints_file.write_text("mixed-dep==2.0.0\n")
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "-c",
+        constraints_file,
+        "requesting-pkg",
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found for mixed-dep==2.0.0" in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
+def test_new_resolver_only_binary_hint_qualifies_conflicting_requirement(
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_wheel_for_package(script, "mixed-dep", "1.0.0")
+    create_basic_sdist_for_package(script, "mixed-dep", "2.0.0")
+    create_basic_wheel_for_package(
+        script,
+        "pkga",
+        "1.0.0",
+        depends=["mixed-dep>=2"],
+    )
+    create_basic_wheel_for_package(
+        script,
+        "pkgb",
+        "1.0.0",
+        depends=["mixed-dep<2"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "pkga",
+        "pkgb",
+        expect_error=True,
+    )
+
+    output = result.stderr + result.stdout
+    assert "No matching binary distribution was found for mixed-dep>=2" in output
+    assert "No matching binary distribution was found for mixed-dep;" not in output
+
+
+def test_new_resolver_only_binary_hint_not_shown_for_no_binary(
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_wheel_for_package(script, "wheel-only-dep", "1.0.0")
+    create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["wheel-only-dep==1.0.0"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--no-binary",
+        "wheel-only-dep",
+        "requesting-pkg",
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found" not in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
+def test_new_resolver_only_binary_hint_not_shown_for_version_conflict(
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_wheel_for_package(script, "base", "1.0")
+    create_basic_wheel_for_package(script, "base", "2.0")
+    create_basic_wheel_for_package(
+        script,
+        "pkga",
+        "1.0",
+        depends=["base==1.0"],
+    )
+    create_basic_wheel_for_package(
+        script,
+        "pkgb",
+        "1.0",
+        depends=["base==2.0"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "pkga",
+        "pkgb",
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found" not in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
+def test_new_resolver_only_binary_hint_not_shown_for_hashed_requirement(
+    tmpdir: pathlib.Path,
+    script: PipTestEnvironment,
+) -> None:
+    sdist = create_basic_sdist_for_package(script, "sdist-dep", "1.0.0")
+    digest = hashlib.sha256(sdist.read_bytes()).hexdigest()
+
+    requirements_file = tmpdir.joinpath("requirements.txt")
+    requirements_file.write_text(f"sdist-dep==1.0.0 --hash=sha256:{digest}\n")
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "-r",
+        requirements_file,
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found for sdist-dep" not in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
+def test_new_resolver_only_binary_hint_not_shown_with_explicit_candidate(
+    script: PipTestEnvironment,
+) -> None:
+    explicit_wheel = create_basic_wheel_for_package(
+        script,
+        "mixed-dep",
+        "1.0.0",
+    )
+    create_basic_sdist_for_package(script, "mixed-dep", "2.0.0")
+    create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["mixed-dep==2.0.0"],
+    )
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "requesting-pkg",
+        f"mixed-dep @ {explicit_wheel.as_uri()}",
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found for mixed-dep" not in (
+        result.stderr + result.stdout
+    ), str(result)
+
+
+def test_new_resolver_only_binary_hint_not_shown_for_link_constraint(
+    tmpdir: pathlib.Path,
+    script: PipTestEnvironment,
+) -> None:
+    create_basic_sdist_for_package(script, "mixed-dep", "2.0.0")
+    constrained_wheel = create_basic_wheel_for_package(
+        script,
+        "mixed-dep",
+        "1.0.0",
+    )
+    create_basic_wheel_for_package(
+        script,
+        "requesting-pkg",
+        "1.0.0",
+        depends=["mixed-dep==2.0.0"],
+    )
+
+    constraints_file = tmpdir.joinpath("constraints.txt")
+    constraints_file.write_text(f"mixed-dep @ {constrained_wheel.as_uri()}\n")
+
+    result = script.pip(
+        "install",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        script.scratch_path,
+        "--only-binary",
+        ":all:",
+        "-c",
+        constraints_file,
+        "requesting-pkg",
+        expect_error=True,
+    )
+
+    assert "No matching binary distribution was found for mixed-dep" not in (
+        result.stderr + result.stdout
     ), str(result)

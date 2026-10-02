@@ -518,6 +518,31 @@ class TestLinkEvaluator:
         assert actual == (LinkType.candidate, expected_version)
 
     @pytest.mark.parametrize(
+        "formats, url, fail_reason",
+        [
+            (
+                ["binary"],
+                "http:/yo/pytest-1.0.tar.gz",
+                "No sources permitted for pytest",
+            ),
+            (
+                ["source"],
+                "http:/yo/pytest-1.0-py2.py3-none-any.whl",
+                "No binaries permitted for pytest",
+            ),
+        ],
+    )
+    def test_evaluate_link__format_control(
+        self,
+        formats: list[str],
+        url: str,
+        fail_reason: str,
+    ) -> None:
+        link = Link(url)
+        evaluator = self.make_test_link_evaluator(formats=formats)
+        assert evaluator.evaluate_link(link) == (LinkType.format_control, fail_reason)
+
+    @pytest.mark.parametrize(
         "url, link_type, fail_reason",
         [
             # TODO: Uncomment this test case when #1217 is fixed.
@@ -627,3 +652,27 @@ class TestPackageFinderUploadedPriorTo:
 
         link_evaluator = finder.make_link_evaluator("test-package")
         assert link_evaluator._uploaded_prior_to is None
+
+
+def test_format_control_recheck_keeps_other_candidate_filters(data: TestData) -> None:
+    finder = make_test_finder(index_urls=[data.index_url("datarequire")])
+    finder.format_control.only_binary.add(":all:")
+
+    assert finder.find_all_candidates("fakepackage") == []
+
+    with patch.object(
+        finder._link_collector,
+        "collect_sources",
+        side_effect=AssertionError("format-control recheck must not collect sources"),
+    ):
+        incompatible = finder.find_candidates_ignored_by_format_control(
+            "fakepackage",
+            specifier=SpecifierSet("==2.6.0"),
+        )
+        assert incompatible == []
+
+        compatible = finder.find_candidates_ignored_by_format_control(
+            "fakepackage",
+            specifier=SpecifierSet("==3.3.0"),
+        )
+        assert [str(candidate.version) for candidate in compatible] == ["3.3.0"]

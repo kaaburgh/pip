@@ -1,0 +1,3 @@
+Improve resolver diagnostics for ``--only-binary`` failures by reporting when a
+matching source distribution was observed but excluded by the active binary-only
+format policy.
