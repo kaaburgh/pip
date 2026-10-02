@@ -221,7 +221,7 @@ def test_new_resolver_reports_only_binary_source_exclusion(
     )
 
     assert (
-        "No matching binary distribution was found for sdist-dep; "
+        "No matching binary distribution was found for sdist-dep==1.0.0; "
         "a source distribution matching this requirement was found, but source "
         "distributions are excluded by the current --only-binary setting."
         in result.stderr + result.stdout
