@@ -891,7 +891,10 @@ class Factory:
         # satisfied. We just report that case.
         if len(e.causes) == 1:
             req, parent = next(iter(e.causes))
-            if req.name not in constraints:
+            constraint = constraints.get(req.name)
+            if constraint is None:
+                constraint = constraints.get(req.project_name)
+            if constraint is None:
                 return self._report_single_requirement_conflict(req, parent)
 
         # OK, we now have a list of requirements that can't all be
